@@ -18,6 +18,7 @@
       <div class="flex gap-8">
         <select id="contestSelect" style="width:auto" onchange="load()"></select>
         <button class="btn btn-outline" onclick="load()">🔄 刷新</button>
+        <a class="btn btn-outline hidden" id="replayBtn" href="/replay.html">🎬 比赛复盘</a>
       </div>
     </div>
 
@@ -47,7 +48,11 @@
       try {
         const data = await OJ.api("/contests");
         sel.innerHTML = data.items.map(c => `<option value="${OJ.esc(c.id)}">${OJ.esc(c.title)}</option>`).join("");
-        if (data.items.length) { sel.value = data.items[0].id; load(); }
+        if (data.items.length) {
+          const want = new URLSearchParams(location.search).get("c");
+          if (want && data.items.some(c => c.id === want)) sel.value = want;
+          load();
+        }
         else { OJ.el("lbBody").innerHTML = `<tr><td colspan="10" class="empty">暂无竞赛</td></tr>`; }
       } catch (e) {}
     }
@@ -77,6 +82,11 @@
 
       // 封榜横幅
       OJ.el("frozenBanner").classList.toggle("hidden", !d.frozen_now);
+
+      // 仅已结束的比赛开放复盘入口（进行中/未开始不显示）
+      const replayBtn = OJ.el("replayBtn");
+      replayBtn.href = "/replay.html?c=" + encodeURIComponent(cid);
+      replayBtn.classList.toggle("hidden", d.contest_status !== "ended");
 
       const problems = d.contest_problems || [];
       const isAcm = d.mode === "acm";

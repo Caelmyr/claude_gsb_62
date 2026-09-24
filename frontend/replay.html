@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>比赛复盘 - 在线代码评测与竞赛系统</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <div id="nav"></div>
+
+  <div class="container">
+    <div class="page-head">
+      <div>
+        <h1>🎬 比赛复盘</h1>
+        <div class="sub" id="pageSub">回看已结束比赛的首杀时刻与排名变迁（比赛进行中不开放）</div>
+      </div>
+      <div class="flex gap-8">
+        <select id="contestSelect" style="width:260px" onchange="onSelect()"></select>
+        <a class="btn btn-outline" id="lbLink" href="/leaderboard.html">查看实时榜单</a>
+      </div>
+    </div>
+
+    <div id="notEndedBanner" class="frozen-banner hidden"></div>
+    <div id="content"></div>
+  </div>
+
+  <script src="/assets/app.js"></script>
+  <script>
+    OJ.boot("leaderboard");
+
+    let DATA = null;
+    let replay = { users: {}, applied: 0 };
+    let curves = null;          // {times:[], series:{uid:[[xIdx,rank]...]}}
+    let hiddenUsers = new Set();
+    let playing = false;
+    let playTimer = null;
+    const me = OJ.currentUser();
+
+    /* ---------------- 数据加载 ---------------- */
+
+    async function init() {
+      const sel = OJ.el("contestSelect");
+      let contests = [];
+      try {
+        const d = await OJ.api("/contests");
+        contests = (d.items || []).filter(c => c.status === "ended");
+      } catch (e) {
+        renderError(e.message);
+        return;
+      }
+      if (!contests.length) {
+        sel.innerHTML = "";
+        renderEmpty("暂无可复盘的比赛", "复盘仅对已结束的竞赛开放，当前没有已结束的比赛。");
+        return;
+      }
+      sel.innerHTML = contests.map(c =>
+        `<option value="${OJ.esc(c.id)}">${OJ.esc(c.title)}</option>`).join("");
+
+      const want = new URLSearchParams(location.search).get("c");
+      if (want && contests.some(c => c.id === want)) sel.value = want;
+      await loadReplay(sel.value);
+    }
+
+    function onSelect() {
+      const id = OJ.el("contestSelect").value;
+      history.replaceState(null, "", "?c=" + encodeURIComponent(id));
+      loadReplay(id);
+    }
+
+    async function loadReplay(cid) {
+      stopPlay();
+      DATA = null;
+      OJ.el("lbLink").href = "/leaderboard.html?c=" + encodeURIComponent(cid);
+      OJ.el("content").innerHTML = `<div class="card"><div class="empty"><span class="spinner"></span> 正在重建比赛过程…</div></div>`;
+      OJ.el("notEndedBanner").classList.add("hidden");
+      try {
+        DATA = await OJ.api("/contests/" + cid + "/replay");
+      } catch (e) {
+        OJ.el("content").innerHTML = "";
+        const banner = OJ.el("notEndedBanner");
+        banner.textContent = "⛔ " + e.message;
+        banner.classList.remove("hidden");
+        renderEmpty("复盘未开放", e.message);
+        return;
+      }
+      hiddenUsers = new Set();
+      replay = { users: {}, applied: 0 };
+      curves = buildCurves(DATA);
+      renderAll();
+    }
+
+    /* ---------------- 重放引擎（前端增量重建排名） ---------------- */
+
+    function freshRow(e) {
+      return {
+        user_id: e.uid, username: e.username,
+        nickname: e.nickname || e.username,
+        solved: 0, score: 0, penalty: 0, total_time_ms: 0, problems: {},
+      };
+    }
+
+    function applyEvent(users, e) {
+      let row = users[e.uid];
+      if (!row) { row = freshRow(e); users[e.uid] = row; }
+      let p = row.problems[e.pid];
+      if (!p) p = row.problems[e.pid] = { solved: false, attempts: 0, first_t: null,
+                                          penalty: 0, score: 0, time_ms: 0 };
+      p.attempts++;
+      p.time_ms = Math.max(p.time_ms, e.time_ms || 0);
+      if (e.status === "AC" && !p.solved) {
+        p.solved = true;
+        p.first_t = e.t;
+        if (DATA.mode === "acm") p.penalty = e.t + (p.attempts - 1) * DATA.penalty_seconds;
+        row.solved++;
+      }
+      if (DATA.mode === "ioi") p.score = Math.max(p.score, e.score || 0);
+      else p.score = p.solved ? 1 : 0;
+      row.penalty = Object.values(row.problems).reduce((s, x) => s + (x.penalty || 0), 0);
+      row.score = Object.values(row.problems).reduce((s, x) => s + (x.score || 0), 0);
+      row.total_time_ms = Object.values(row.problems).reduce((s, x) => s + (x.time_ms || 0), 0);
+    }
+
+    function upperBoundT(t) {
+      const evs = DATA.events;
+      let lo = 0, hi = evs.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (evs[mid].t <= t) lo = mid + 1; else hi = mid;
+      }
+      return lo;
+    }
+
+    function ensureTo(cutoff) {
+      const target = upperBoundT(cutoff);
+      if (target < replay.applied) replay = { users: {}, applied: 0 };
+      const evs = DATA.events;
+      while (replay.applied < target) applyEvent(replay.users, evs[replay.applied++]);
+      return replay;
+    }
+
+    function rankRows(users) {
+      const rows = Object.values(users).map(r => Object.assign({}, r, {
+        problems: Object.assign({}, r.problems),
+      }));
+      rows.sort((a, b) => DATA.mode === "acm"
+        ? (b.solved - a.solved || a.penalty - b.penalty || (a.user_id < b.user_id ? -1 : 1))
+        : (b.score - a.score || a.total_time_ms - b.total_time_ms || (a.user_id < b.user_id ? -1 : 1)));
+      rows.forEach((r, i) => r.rank = i + 1);
+      return rows;
+    }
+
+    /* 预计算每位参赛者在每个事件时刻的名次（用于排名曲线） */
+    function buildCurves(data) {
+      const users = {};
+      const times = [];
+      const rankAt = {};   // uid -> [[tIdx, rank]]
+      let lastT = null;
+      let tIdx = -1;
+      data.events.forEach((e, i) => {
+        applyEvent(users, e);
+        if (e.t !== lastT) { tIdx++; times.push(e.t); lastT = e.t; }
+        const rows = rankRows(users);
+        rows.forEach(r => {
+          (rankAt[r.user_id] = rankAt[r.user_id] || []).push([tIdx, r.rank]);
+        });
+      });
+      return { times, rankAt };
+    }
+
+    /* ---------------- 渲染 ---------------- */
+
+    function renderAll() {
+      renderShell();
+      renderTimeline();
+      renderChart();
+      renderSnapshot();
+    }
+
+    function renderShell() {
+      const d = DATA;
+      const s = d.stats;
+      OJ.el("pageSub").textContent =
+        `${d.start_time ? OJ.fmtTime(d.start_time) : ""} ~ ${d.end_time ? OJ.fmtTime(d.end_time) : ""} · ` +
+        `${d.mode.toUpperCase()} · 题目 ${d.problems.length} 道 · 参赛者 ${s.participants} 人 · 提交 ${s.submissions} 次 · AC ${s.accepted} 次`;
+
+      const max = d.duration > 0 ? d.duration : 0;
+      OJ.el("content").innerHTML = `
+        ${s.submissions === 0 ? `
+        <div class="card mb-16">
+          <div class="empty">📭 本场比赛期间没有任何提交记录，下方将展示空的题目与榜单状态。</div>
+        </div>` : ""}
+
+        <div class="card mb-16">
+          <div class="card-title">🎯 首次通过时间线
+            <span class="hint">按题目顺序，展示每道题第一个做对的人；点击可跳转到该时刻</span>
+          </div>
+          <div id="timelineBox" class="timeline"></div>
+        </div>
+
+        <div class="card mb-16">
+          <div class="card-title">📈 排名变迁曲线
+            <span class="hint">纵轴为名次（越靠上越靠前），横轴为比赛时间；点击图例可高亮/隐藏选手</span>
+          </div>
+          <div id="chartBox" class="chart-box replay-chart"><div class="empty">${
+            s.participants === 0 ? "没有参赛者，暂无排名曲线" : ""}</div></div>
+          <div id="legendBox" class="legend"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">🕓 时刻排名回放
+            <span class="hint">拖动滑块或播放，查看任意时刻的完整排名</span>
+          </div>
+          <div class="replay-controls">
+            <button class="btn btn-outline btn-sm" id="btnFirst" title="跳到开始">⏮</button>
+            <button class="btn btn-outline btn-sm" id="btnPrev" title="上一次提交">◀</button>
+            <button class="btn btn-primary btn-sm" id="btnPlay">▶ 播放</button>
+            <button class="btn btn-outline btn-sm" id="btnNext" title="下一次提交">▶</button>
+            <button class="btn btn-outline btn-sm" id="btnLast" title="跳到结束">⏭</button>
+            <input type="range" id="timeSlider" min="0" max="${max}" step="1" value="${max}"
+                   ${max <= 0 ? "disabled" : ""} style="flex:1">
+            <div class="replay-clock">
+              <div id="clockElapsed" class="clock-big">${fmtClock(max)}</div>
+              <div id="clockAbs" class="muted" style="font-size:12px"></div>
+            </div>
+          </div>
+          <div id="gapBox" class="gap-box"></div>
+          <div class="table-wrap">
+            <table>
+              <thead id="snapHead"></thead>
+              <tbody id="snapBody"></tbody>
+            </table>
+          </div>
+        </div>`;
+
+      const slider = OJ.el("timeSlider");
+      slider.addEventListener("input", () => { stopPlay(); renderSnapshot(); });
+      OJ.el("btnPlay").onclick = togglePlay;
+      OJ.el("btnFirst").onclick = () => { stopPlay(); slider.value = 0; renderSnapshot(); };
+      OJ.el("btnLast").onclick = () => { stopPlay(); slider.value = max; renderSnapshot(); };
+      OJ.el("btnPrev").onclick = () => jumpEvent(-1);
+      OJ.el("btnNext").onclick = () => jumpEvent(1);
+    }
+
+    function renderTimeline() {
+      const box = OJ.el("timelineBox");
+      if (!box) return;
+      if (!DATA.problems.length) {
+        box.innerHTML = `<div class="empty">本场比赛没有配置题目</div>`;
+        return;
+      }
+      box.innerHTML = DATA.problems.map(p => {
+        const f = DATA.first_solves[p.problem_id];
+        const st = DATA.per_problem[p.problem_id] || { attempts: 0, accepted: 0 };
+        if (!f) {
+          return `<div class="tl-item tl-unsolved">
+              <span class="tl-badge">${OJ.esc(p.problem_id)}</span>
+              <div class="tl-body">
+                <div class="tl-title muted">${OJ.esc(p.problem_id)} · ${OJ.esc(p.title || "未命名题目")}</div>
+                <div class="tl-meta">${st.attempts === 0
+                  ? "🔇 无人提交，也无人做对"
+                  : `🧱 共 ${st.attempts} 次提交，始终无人做对`}</div>
+              </div>
+              <span class="tl-time muted">—</span>
+            </div>`;
+        }
+        return `<div class="tl-item tl-solved" onclick="jumpTo(${f.t})" style="cursor:pointer">
+            <span class="tl-badge AC">${OJ.esc(p.problem_id)}</span>
+            <div class="tl-body">
+              <div class="tl-title"><strong>${OJ.esc(f.nickname || f.username)}</strong> 首个做对
+                <span class="muted" style="font-weight:400">${OJ.esc(p.problem_id)} · ${OJ.esc(p.title || "")}</span></div>
+              <div class="tl-meta">开赛 ${fmtClock(f.t)} 时首杀 · 该题共 ${st.attempts} 次提交 / ${st.accepted} 次 AC</div>
+            </div>
+            <span class="tl-time">${fmtClock(f.t)}</span>
+          </div>`;
+      }).join("");
+    }
+
+    const PALETTE = ["#3d5afe", "#16a34a", "#ea580c", "#dc2626", "#7c3aed", "#0891b2",
+                     "#ca8a04", "#db2777", "#65a30d", "#0d9488", "#9333ea", "#4f46e5"];
+    function colorOf(uid) {
+      const idx = DATA.participants.findIndex(u => u.user_id === uid);
+      return PALETTE[(idx >= 0 ? idx : 0) % PALETTE.length];
+    }
+
+    function renderChart() {
+      const box = OJ.el("chartBox");
+      const legend = OJ.el("legendBox");
+      if (!box) return;
+      if (!DATA.stats.participants) { box.innerHTML = `<div class="empty">没有参赛者，暂无排名曲线</div>`; return; }
+
+      // 最终名次决定图例顺序
+      ensureTo(DATA.duration);
+      const finalRows = rankRows(replay.users);
+      legend.innerHTML = finalRows.map(r => {
+        const mine = me && (r.username === me.username || r.nickname === me.nickname);
+        return `<span class="legend-chip${mine ? " legend-me" : ""}" data-uid="${OJ.esc(r.user_id)}"
+                  style="--chip:${colorOf(r.user_id)}">
+                  <i></i>${OJ.esc(r.nickname || r.username)} <small>${r.rank}</small></span>`;
+      }).join("");
+      legend.querySelectorAll(".legend-chip").forEach(chip => {
+        chip.onclick = () => {
+          const uid = chip.getAttribute("data-uid");
+          if (hiddenUsers.has(uid)) { hiddenUsers.delete(uid); chip.classList.remove("off"); }
+          else { hiddenUsers.add(uid); chip.classList.add("off"); }
+          drawChart(finalRows);
+        };
+      });
+      drawChart(finalRows);
+    }
+
+    function drawChart(finalRows) {
+      const box = OJ.el("chartBox");
+      const W = Math.max(320, box.clientWidth || 800), H = 280;
+      const padL = 34, padR = 140, padT = 14, padB = 26;
+      const n = DATA.participants.length;
+      const times = curves.times;
+      const dur = DATA.duration || 1;
+      const xOf = t => padL + (t / dur) * (W - padL - padR);
+      const yOf = rank => padT + ((rank - 1) / Math.max(1, n - 1)) * (H - padT - padB);
+
+      // 网格与名次刻度
+      let grid = "";
+      for (let r = 1; r <= n; r++) {
+        const y = yOf(r);
+        grid += `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="var(--border)" stroke-width="1"/>
+                 <text x="${padL - 8}" y="${y + 4}" text-anchor="end" font-size="11" fill="var(--text-muted)">${r}</text>`;
+      }
+      // 时间刻度（最多 6 个）
+      let axis = "";
+      const ticks = Math.min(6, dur);
+      for (let i = 0; i <= ticks; i++) {
+        const t = Math.round(dur * i / ticks);
+        axis += `<text x="${xOf(t)}" y="${H - 8}" text-anchor="middle" font-size="11" fill="var(--text-muted)">${fmtClock(t)}</text>`;
+      }
+
+      // 选手折线（先画非高亮，再画高亮，保证层级）
+      const cur = parseInt((OJ.el("timeSlider") || {}).value, 10) || 0;
+      let lines = "", labels = "";
+      const ordered = [...finalRows].sort((a, b) => {
+        const am = me && (a.username === me.username || a.nickname === me.nickname) ? 1 : 0;
+        const bm = me && (b.username === me.username || b.nickname === me.nickname) ? 1 : 0;
+        return am - bm;   // 自己的曲线最后绘制，置于最上层
+      });
+      ordered.forEach(r => {
+        const pts = curves.rankAt[r.user_id];
+        if (!pts || hiddenUsers.has(r.user_id)) return;
+        const mine = me && (r.username === me.username || r.nickname === me.nickname);
+        const attr = pts.map(([ti, rank]) => `${xOf(times[ti]).toFixed(1)},${yOf(rank).toFixed(1)}`).join(" ");
+        const sw = mine ? 3 : 1.6;
+        const op = mine ? 1 : 0.75;
+        lines += `<polyline points="${attr}" fill="none" stroke="${colorOf(r.user_id)}"
+                    stroke-width="${sw}" opacity="${op}" stroke-linejoin="round" stroke-linecap="round"
+                    vector-effect="non-scaling-stroke"/>`;
+        const [, lastRank] = pts[pts.length - 1];
+        labels += `<text x="${W - padR + 8}" y="${yOf(lastRank) + 4}" font-size="11"
+                    fill="${colorOf(r.user_id)}" opacity="${op}">${OJ.esc(r.nickname || r.username)}</text>`;
+      });
+
+      const markerX = xOf(Math.min(cur, dur));
+      box.innerHTML = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
+        ${grid}${axis}${lines}
+        <line x1="${markerX}" y1="${padT}" x2="${markerX}" y2="${H - padB}"
+              stroke="var(--primary)" stroke-width="1.5" stroke-dasharray="4 3"/>
+        <circle cx="${markerX}" cy="${padT}" r="4" fill="var(--primary)"/>
+        ${labels}
+      </svg>`;
+    }
+
+    function renderSnapshot() {
+      const slider = OJ.el("timeSlider");
+      if (!slider || !DATA) return;
+      const t = parseInt(slider.value, 10) || 0;
+      ensureTo(t);
+      const rows = rankRows(replay.users);
+
+      OJ.el("clockElapsed").textContent = fmtClock(t);
+      OJ.el("clockAbs").textContent = "实际时刻 " + fmtAbs(t);
+
+      // 空时间段提示（无提交的区间不报错、不空白）
+      const evs = DATA.events;
+      const n = upperBoundT(t);
+      const gap = OJ.el("gapBox");
+      if (!evs.length) {
+        gap.className = "gap-box gap-empty";
+        gap.textContent = "📭 本场比赛没有任何提交记录";
+      } else if (n === 0) {
+        gap.className = "gap-box gap-empty";
+        gap.innerHTML = `⏳ 比赛刚开始，尚无提交（第一次提交发生在 <a href="javascript:jumpTo(${evs[0].t})">${fmtClock(evs[0].t)}</a>）`;
+      } else {
+        const prev = evs[n - 1], next = evs[n];
+        let html = `🕓 最近一次提交：<strong>${fmtClock(prev.t)}</strong> · ${OJ.esc(prev.nickname || prev.username)} 提交 ${OJ.esc(prev.pid)} ` +
+                   `<span class="badge ${prev.status}">${prev.status}</span>`;
+        if (next) {
+          const quiet = next.t - prev.t;
+          html += `　｜　下一次提交在 ${fmtClock(next.t)}（这段 <strong>${quiet} 秒</strong>无人提交）`;
+        } else {
+          html += `　｜　此后到比赛结束再无提交`;
+        }
+        gap.className = "gap-box";
+        gap.innerHTML = html;
+      }
+
+      // 表头
+      const isAcm = DATA.mode === "acm";
+      OJ.el("snapHead").innerHTML = `<tr>
+        <th>#</th><th>用户</th>
+        ${isAcm ? "<th class='text-center'>解题数</th><th class='text-center'>罚时</th>"
+                : "<th class='text-center'>总分</th><th class='text-center'>用时</th>"}
+        ${DATA.problems.map(p => `<th class="text-center" title="${OJ.esc(p.title || "")}">${OJ.esc(p.problem_id)}</th>`).join("")}
+      </tr>`;
+
+      const body = OJ.el("snapBody");
+      if (!rows.length) {
+        body.innerHTML = `<tr><td colspan="${4 + DATA.problems.length}" class="empty">
+          该时刻还没有任何提交，排行榜为空</td></tr>`;
+        updateMarker();
+        return;
+      }
+      body.innerHTML = rows.map(r => {
+        const rankCls = r.rank <= 3 ? `rank-${r.rank}` : "";
+        const mine = me && (r.user_id === me.id || r.username === me.username || r.nickname === me.nickname);
+        const cells = DATA.problems.map(p => {
+          const pr = r.problems[p.problem_id];
+          if (!pr || !pr.attempts) return `<td class="text-center muted">-</td>`;
+          if (isAcm) {
+            return pr.solved
+              ? `<td class="text-center"><span class="badge AC" title="${fmtClock(pr.first_t)} 通过">✓${pr.attempts > 1 ? ` (${pr.attempts})` : ""}</span></td>`
+              : `<td class="text-center"><span class="badge WA">-${pr.attempts}</span></td>`;
+          }
+          return `<td class="text-center mono">${pr.score}</td>`;
+        }).join("");
+        const metric = isAcm
+          ? `<td class="text-center solved-cell">${r.solved}</td><td class="text-center mono">${fmtPenalty(r.penalty)}</td>`
+          : `<td class="text-center solved-cell">${r.score}</td><td class="text-center mono">${OJ.fmtDuration(r.total_time_ms)}</td>`;
+        return `<tr class="${mine ? "rank-me" : ""}">
+          <td class="${rankCls}" style="font-weight:700">${r.rank}</td>
+          <td>${OJ.esc(r.nickname || r.username)}${mine ? " <span class='role-tag'>我</span>" : ""}</td>
+          ${metric}${cells}
+        </tr>`;
+      }).join("");
+      updateMarker();
+    }
+
+    function updateMarker() {
+      // 排名图上的当前时刻游标随滑块移动
+      const svg = document.querySelector("#chartBox svg");
+      if (!svg || !DATA) return;
+      const box = OJ.el("chartBox");
+      const W = Math.max(320, box.clientWidth || 800), padL = 34, padR = 140;
+      const dur = DATA.duration || 1;
+      const t = Math.min(parseInt(OJ.el("timeSlider").value, 10) || 0, dur);
+      const x = padL + (t / dur) * (W - padL - padR);
+      const line = svg.querySelector("line[stroke-dasharray]");
+      const dot = svg.querySelector("circle");
+      if (line) { line.setAttribute("x1", x); line.setAttribute("x2", x); }
+      if (dot) dot.setAttribute("cx", x);
+    }
+
+    /* ---------------- 播放与跳转 ---------------- */
+
+    function togglePlay() {
+      const slider = OJ.el("timeSlider");
+      if (playing) { stopPlay(); return; }
+      if (parseInt(slider.value, 10) >= DATA.duration) slider.value = 0;
+      playing = true;
+      OJ.el("btnPlay").textContent = "⏸ 暂停";
+      const step = Math.max(1, Math.round((DATA.duration || 1) / 300));
+      playTimer = setInterval(() => {
+        let v = parseInt(slider.value, 10) + step;
+        if (v >= DATA.duration) { v = DATA.duration; slider.value = v; renderSnapshot(); stopPlay(); return; }
+        slider.value = v;
+        renderSnapshot();
+      }, 200);
+    }
+
+    function stopPlay() {
+      playing = false;
+      if (playTimer) { clearInterval(playTimer); playTimer = null; }
+      const btn = OJ.el("btnPlay");
+      if (btn) btn.textContent = "▶ 播放";
+    }
+
+    function jumpEvent(dir) {
+      stopPlay();
+      const t = parseInt(OJ.el("timeSlider").value, 10);
+      const times = [...new Set(DATA.events.map(e => e.t))].sort((a, b) => a - b);
+      if (!times.length) return;
+      let target;
+      if (dir > 0) target = times.find(x => x > t);
+      else target = [...times].reverse().find(x => x < t);
+      if (target === undefined) return;
+      OJ.el("timeSlider").value = target;
+      renderSnapshot();
+    }
+
+    function jumpTo(t) {
+      if (!DATA) return;
+      stopPlay();
+      const slider = OJ.el("timeSlider");
+      if (!slider) return;
+      slider.value = Math.max(0, Math.min(t, DATA.duration));
+      renderSnapshot();
+      slider.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+
+    /* ---------------- 工具 ---------------- */
+
+    function fmtClock(sec) {
+      sec = Math.max(0, Math.floor(sec || 0));
+      const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+      const pad = n => String(n).padStart(2, "0");
+      return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+    }
+
+    function fmtPenalty(sec) {
+      if (!sec && sec !== 0) return "-";
+      return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+    }
+
+    function fmtAbs(elapsed) {
+      if (!DATA.start_time) return "-";
+      const base = new Date(DATA.start_time.replace(" ", "T")).getTime();
+      if (isNaN(base)) return "-";
+      const d = new Date(base + elapsed * 1000);
+      const pad = n => String(n).padStart(2, "0");
+      return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    }
+
+    function renderEmpty(title, sub) {
+      OJ.el("content").innerHTML = `
+        <div class="card"><div class="empty">
+          <div style="font-size:16px;font-weight:600;margin-bottom:6px">${OJ.esc(title)}</div>
+          <div>${OJ.esc(sub || "")}</div>
+        </div></div>`;
+    }
+
+    function renderError(msg) {
+      OJ.el("content").innerHTML =
+        `<div class="card"><div class="empty">${OJ.esc(msg)}</div></div>`;
+    }
+
+    window.addEventListener("resize", () => {
+      if (!DATA) return;
+      clearTimeout(window._rz);
+      window._rz = setTimeout(() => {
+        if (DATA && DATA.stats.participants) { renderChart(); renderSnapshot(); }
+      }, 200);
+    });
+
+    init();
+  </script>
+</body>
+</html>

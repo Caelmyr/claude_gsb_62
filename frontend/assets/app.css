@@ -276,3 +276,49 @@ code.inline { font-family: var(--mono); background: var(--surface-2); padding: 1
 .flex { display: flex; } .flex-between { display: flex; justify-content: space-between; align-items: center; }
 .gap-8 { gap: 8px; } .gap-12 { gap: 12px; } .wrap { flex-wrap: wrap; }
 .ml-auto { margin-left: auto; }
+
+/* ---------- 赛后复盘 ---------- */
+.timeline { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.tl-item {
+  display: flex; align-items: center; gap: 10px;
+  border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+  background: var(--surface-2);
+}
+.tl-solved { border-left: 3px solid var(--green); transition: box-shadow .15s, transform .15s; }
+.tl-solved:hover { box-shadow: var(--shadow); transform: translateY(-1px); }
+.tl-unsolved { opacity: .85; }
+.tl-badge {
+  flex: 0 0 auto; min-width: 42px; text-align: center; padding: 3px 8px;
+  border-radius: 6px; font-weight: 700; font-size: 13px;
+  background: var(--gray-bg); color: var(--gray);
+}
+.tl-badge.AC { background: var(--green-bg); color: var(--green); }
+.tl-body { flex: 1; min-width: 0; }
+.tl-title { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tl-meta { font-size: 12px; color: var(--text-muted); }
+.tl-time { flex: 0 0 auto; font-family: var(--mono); font-weight: 700; color: var(--green); }
+
+.replay-chart { width: 100%; height: 280px; }
+.replay-chart svg { display: block; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.legend-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--border); border-radius: 999px;
+  padding: 3px 11px; font-size: 12px; cursor: pointer; user-select: none;
+  background: var(--surface-2);
+}
+.legend-chip i { width: 10px; height: 10px; border-radius: 50%; background: var(--chip); }
+.legend-chip small { color: var(--text-muted); }
+.legend-chip.off { opacity: .4; text-decoration: line-through; }
+.legend-me { border-color: var(--primary); background: var(--primary-50); font-weight: 600; }
+
+.replay-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 6px 0 14px; }
+.replay-controls input[type="range"] { min-width: 200px; accent-color: var(--primary); }
+.replay-clock { min-width: 110px; text-align: right; }
+.clock-big { font-family: var(--mono); font-size: 20px; font-weight: 700; color: var(--primary); }
+.gap-box {
+  font-size: 13px; color: var(--text-muted);
+  background: var(--surface-2); border: 1px dashed var(--border); border-radius: 8px;
+  padding: 8px 12px; margin-bottom: 12px;
+}
+.gap-empty { text-align: center; color: var(--text-muted); }

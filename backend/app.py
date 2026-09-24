@@ -29,7 +29,7 @@ def create_app():
 
     # ---- 前端页面路由 ----
     PAGES = ["index", "problem", "editor", "submissions", "leaderboard",
-             "contest", "users", "forum", "stats", "settings"]
+             "contest", "replay", "users", "forum", "stats", "settings"]
 
     @app.get("/")
     def home():

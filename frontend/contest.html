@@ -53,6 +53,7 @@
                 <div id="cd-${c.id}" class="countdown"></div>
                 <div class="mt-8 flex gap-8" style="justify-content:flex-end">
                   <a class="btn btn-outline btn-sm" href="/leaderboard.html?c=${OJ.esc(c.id)}">查看榜单</a>
+                  ${c.status === "ended" ? `<a class="btn btn-outline btn-sm" href="/replay.html?c=${OJ.esc(c.id)}">🎬 比赛复盘</a>` : ""}
                   ${isAdmin ? `
                     <button class="btn btn-outline btn-sm" onclick="openForm('${OJ.esc(c.id)}')">编辑</button>
                     <button class="btn btn-danger btn-sm" onclick="del('${OJ.esc(c.id)}')">删除</button>
