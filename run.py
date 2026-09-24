@@ -25,6 +25,7 @@ PAGES = [
     ("editor.html", "代码编辑器"),
     ("submissions.html", "提交记录与评测结果"),
     ("leaderboard.html", "实时排行榜"),
+    ("replay.html", "赛后复盘"),
     ("contest.html", "竞赛管理"),
     ("users.html", "用户管理"),
     ("forum.html", "讨论区"),

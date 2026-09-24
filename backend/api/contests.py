@@ -8,6 +8,7 @@ from backend.api import ok, err, require_auth, require_admin, get_current_user
 from backend.storage import read_json, atomic_write_json, list_files
 from backend.utils import now_iso, gen_id, frozen_now
 from backend.judge.ranking import contest_status, contest_elapsed, reset_contest_scores
+from backend.judge.replay import build_replay
 
 contests_bp = Blueprint("contests", __name__)
 
@@ -119,3 +120,22 @@ def delete_contest(contest_id):
 def reset_scores(contest_id):
     reset_contest_scores(contest_id)
     return ok()
+
+
+@contests_bp.get("/contests/<contest_id>/replay")
+@require_auth
+def contest_replay(contest_id):
+    """赛后复盘：首杀时间线 + 全程提交事件（仅已结束的比赛开放）。
+
+    只读接口：数据来自提交分片，不触碰排行榜/成绩存储。
+    """
+    c = _load(contest_id)
+    if not c:
+        return err("竞赛不存在", 404)
+    if not c.get("visble", True) and request.user.get("role") != "admin":
+        return err("竞赛不存在", 404)
+    status = contest_status(c)
+    if status != "ended":
+        return err("比赛尚未结束，复盘将在比赛结束后开放", 400)
+    penalty_seconds = int(config.DEFAULT_SETTINGS["ranking"]["penalty_seconds"])
+    return ok(build_replay(c, penalty_seconds))

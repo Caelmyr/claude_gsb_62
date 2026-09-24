@@ -17,6 +17,7 @@
       </div>
       <div class="flex gap-8">
         <select id="contestSelect" style="width:auto" onchange="load()"></select>
+        <a class="btn btn-outline hidden" id="replayBtn" href="#">🎬 赛后复盘</a>
         <button class="btn btn-outline" onclick="load()">🔄 刷新</button>
       </div>
     </div>
@@ -44,17 +45,23 @@
 
     async function loadContests() {
       const sel = OJ.el("contestSelect");
+      const wanted = new URLSearchParams(location.search).get("c");
       try {
         const data = await OJ.api("/contests");
         sel.innerHTML = data.items.map(c => `<option value="${OJ.esc(c.id)}">${OJ.esc(c.title)}</option>`).join("");
-        if (data.items.length) { sel.value = data.items[0].id; load(); }
+        if (data.items.length) {
+          if (wanted && data.items.some(c => c.id === wanted)) sel.value = wanted;
+          load();
+        }
         else { OJ.el("lbBody").innerHTML = `<tr><td colspan="10" class="empty">暂无竞赛</td></tr>`; }
       } catch (e) {}
     }
 
+    let curCid = null;
     async function load() {
       const cid = OJ.el("contestSelect").value;
       if (!cid) return;
+      curCid = cid;
       try {
         const d = await OJ.api("/leaderboard/" + cid);
         curContest = d;
@@ -67,6 +74,11 @@
     function render(d) {
       OJ.el("lbTitle").textContent = d.contest_title;
       OJ.el("contestSub").textContent = `模式：${d.mode === "acm" ? "ACM（解题数 + 罚时）" : "IOI（总分）"} · 状态：${d.contest_status}`;
+
+      // 仅已结束的比赛开放赛后复盘入口
+      const replayBtn = OJ.el("replayBtn");
+      replayBtn.href = "/replay.html?c=" + encodeURIComponent(curCid);
+      replayBtn.classList.toggle("hidden", d.contest_status !== "ended");
 
       // 封榜倒计时
       const cd = OJ.el("countdownBox");

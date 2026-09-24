@@ -276,3 +276,68 @@ code.inline { font-family: var(--mono); background: var(--surface-2); padding: 1
 .flex { display: flex; } .flex-between { display: flex; justify-content: space-between; align-items: center; }
 .gap-8 { gap: 8px; } .gap-12 { gap: 12px; } .wrap { flex-wrap: wrap; }
 .ml-auto { margin-left: auto; }
+
+/* ---------- 赛后复盘 ---------- */
+.replay-stat .val { color: var(--primary); }
+.fb-list { display: flex; flex-direction: column; gap: 0; }
+.fb-item {
+  display: flex; align-items: center; gap: 12px; padding: 11px 4px;
+  border-bottom: 1px solid var(--border); flex-wrap: wrap;
+}
+.fb-item:last-child { border-bottom: none; }
+.fb-pid {
+  width: 34px; height: 34px; border-radius: 8px; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 800; font-size: 14px; background: var(--primary-50); color: var(--primary);
+}
+.fb-item.solved .fb-pid { background: var(--green-bg); color: var(--green); }
+.fb-main { flex: 1; min-width: 180px; }
+.fb-main .fb-title { font-weight: 600; font-size: 14px; }
+.fb-main .fb-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.fb-who { font-size: 13px; font-weight: 600; }
+.fb-time { font-family: var(--mono); font-size: 13px; color: var(--text); }
+.fb-item.unsolved { opacity: .8; }
+.fb-unsolved { font-size: 12px; color: var(--text-muted); font-weight: 600; }
+
+.replay-controls {
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 10px; padding: 14px 16px; margin-bottom: 16px;
+}
+.replay-scrub { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.replay-scrub input[type="range"] { flex: 1; min-width: 220px; padding: 0; accent-color: var(--primary); }
+.replay-clock { font-family: var(--mono); font-weight: 700; font-size: 15px; white-space: nowrap; }
+.replay-clock .abs { font-size: 12px; color: var(--text-muted); font-weight: 400; margin-left: 8px; }
+.replay-jump { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.replay-jump select { width: auto; min-width: 260px; font-size: 13px; padding: 6px 10px; }
+
+.chart-wrap { position: relative; width: 100%; }
+.chart-wrap svg { width: 100%; height: auto; display: block; }
+.chart-cursor { stroke: var(--red); stroke-width: 1.5; stroke-dasharray: 4 3; pointer-events: none; }
+.chart-grid { stroke: var(--border); stroke-width: 1; }
+.chart-axis { font-size: 11px; fill: var(--text-muted); }
+.chart-line { fill: none; stroke-width: 2; cursor: pointer; }
+.chart-line.dim { opacity: .12; }
+.chart-hit { fill: transparent; cursor: crosshair; }
+.chart-tip {
+  position: absolute; pointer-events: none; z-index: 5; display: none;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: var(--shadow-lg); padding: 8px 10px; font-size: 12px; min-width: 130px;
+}
+.chart-tip .tt-row { display: flex; justify-content: space-between; gap: 12px; padding: 1px 0; }
+.chart-tip .tt-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.chart-legend .lg {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
+  border: 1px solid var(--border); border-radius: 20px; padding: 3px 10px;
+  background: var(--surface); cursor: pointer; user-select: none;
+}
+.chart-legend .lg.off { opacity: .4; text-decoration: line-through; }
+.chart-legend .lg .sw { width: 10px; height: 10px; border-radius: 50%; }
+.rank-delta-up { color: var(--green); font-weight: 700; font-size: 11px; }
+.rank-delta-down { color: var(--red); font-weight: 700; font-size: 11px; }
+.rank-delta-flat { color: var(--text-muted); font-size: 11px; }
+.replay-locked {
+  text-align: center; padding: 56px 20px; color: var(--text-muted);
+}
+.replay-locked .ico { font-size: 42px; margin-bottom: 12px; }
+
